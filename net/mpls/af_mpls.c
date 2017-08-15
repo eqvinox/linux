@@ -38,6 +38,8 @@
 
 #define MPLS_NEIGH_TABLE_UNSPEC (NEIGH_LINK_TABLE + 1)
 
+#define RTA_MPLS_F_ALL (RTA_MPLS_F_CW_RX | RTA_MPLS_F_CW_TX)
+
 static int label_limit = (1 << 20) - 1;
 static int ttl_max = 255;
 
@@ -499,11 +501,13 @@ static const struct nla_policy rtm_mpls_policy[RTA_MAX+1] = {
 	[RTA_DST]		= { .type = NLA_U32 },
 	[RTA_OIF]		= { .type = NLA_U32 },
 	[RTA_TTL_PROPAGATE]	= { .type = NLA_U8 },
+	[RTA_MPLS_FLAGS]	= { .type = NLA_U8 },
 };
 
 struct mpls_route_config {
 	u32			rc_protocol;
 	u32			rc_ifindex;
+	u8			rc_mpls_flags;
 	u8			rc_via_table;
 	u8			rc_via_alen;
 	u8			rc_via[MAX_VIA_ALEN];
@@ -1042,6 +1046,7 @@ static int mpls_route_add(struct mpls_route_config *cfg,
 	rt->rt_protocol = cfg->rc_protocol;
 	rt->rt_payload_type = cfg->rc_payload_type;
 	rt->rt_ttl_propagate = cfg->rc_ttl_propagate;
+	rt->rt_mpls_flags = cfg->rc_mpls_flags;
 
 	if (cfg->rc_mp)
 		err = mpls_nh_build_multi(cfg, rt, max_labels, extack);
@@ -1877,6 +1882,13 @@ static int rtm_to_route_config(struct sk_buff *skb,
 		case RTA_OIF:
 			cfg->rc_ifindex = nla_get_u32(nla);
 			break;
+		case RTA_MPLS_FLAGS:
+			cfg->rc_mpls_flags = nla_get_u8(nla);
+			if (cfg->rc_mpls_flags & ~(RTA_MPLS_F_ALL)) {
+				NL_SET_ERR_MSG(extack, "RTA_MPLS_FLAGS invalid");
+				goto errout;
+			}
+			break;
 		case RTA_NEWDST:
 			if (nla_get_labels(nla, MAX_NEW_LABELS,
 					   &cfg->rc_output_labels,
@@ -2014,6 +2026,11 @@ static int mpls_dump_route(struct sk_buff *skb, u32 portid, u32 seq, int event,
 			       ttl_propagate))
 			goto nla_put_failure;
 	}
+
+	if (rt->rt_mpls_flags)
+		if (nla_put_u8(skb, RTA_MPLS_FLAGS, rt->rt_mpls_flags))
+			goto nla_put_failure;
+
 	if (rt->rt_nhn == 1) {
 		const struct mpls_nh *nh = rt->rt_nh;
 
@@ -2264,6 +2281,8 @@ static inline size_t lfib_nlmsg_size(struct mpls_route *rt)
 		payload += nla_total_size(nhsize);
 	}
 
+	if (rt->rt_mpls_flags)
+		payload += nla_total_size(1);	/* RTA_MPLS_FLAGS */
 	return payload;
 }
 
@@ -2486,6 +2505,10 @@ static int mpls_getroute(struct sk_buff *in_skb, struct nlmsghdr *in_nlh,
 
 	if (nla_put_labels(skb, RTA_DST, 1, &in_label))
 		goto nla_put_failure;
+
+	if (rt->rt_mpls_flags)
+		if (nla_put_u8(skb, RTA_MPLS_FLAGS, rt->rt_mpls_flags))
+			goto nla_put_failure;
 
 	if (nh->nh_labels &&
 	    nla_put_labels(skb, RTA_NEWDST, nh->nh_labels,

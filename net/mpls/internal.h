@@ -153,7 +153,7 @@ struct mpls_route { /* next hop label forwarding entry */
 	u8			rt_nhn_alive;
 	u8			rt_nh_size;
 	u8			rt_via_offset;
-	u8			rt_reserved1;
+	u8			rt_mpls_flags;
 	struct mpls_nh		rt_nh[];
 };
 

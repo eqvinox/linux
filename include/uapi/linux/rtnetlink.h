@@ -399,6 +399,7 @@ enum rtattr_type_t {
 	RTA_DPORT,
 	RTA_NH_ID,
 	RTA_FLOWLABEL,
+	RTA_MPLS_FLAGS,
 	__RTA_MAX
 };
 
@@ -406,6 +407,15 @@ enum rtattr_type_t {
 
 #define RTM_RTA(r)  ((struct rtattr*)(((char*)(r)) + NLMSG_ALIGN(sizeof(struct rtmsg))))
 #define RTM_PAYLOAD(n) NLMSG_PAYLOAD(n,sizeof(struct rtmsg))
+
+/* MPLS control word, only has an effect on local de/encap.  But note that
+ * TTL expiry / PMTU can trigger a local decap even for transit packets (to
+ * generate ICMP) -- CW_RX & CW_TX should have the same value for that.
+ *
+ * (Generating ICMP for label switched packets isn't implemented... yet.)
+ */
+#define RTA_MPLS_F_CW_RX	(1 << 0)
+#define RTA_MPLS_F_CW_TX	(1 << 1)
 
 /* RTM_MULTIPATH --- array of struct rtnexthop.
  *
