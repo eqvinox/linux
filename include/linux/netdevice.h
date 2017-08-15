@@ -1046,6 +1046,8 @@ struct netdev_net_notifier {
 	struct notifier_block *nb;
 };
 
+struct metadata_dst;
+
 /*
  * This structure defines the management hooks for network devices.
  * The following hooks can be defined; unless noted otherwise, they are
@@ -1404,6 +1406,15 @@ struct netdev_net_notifier {
  *			   struct kernel_hwtstamp_config *kernel_config,
  *			   struct netlink_ext_ack *extack);
  *	Change the hardware timestamping parameters for NIC device.
+ * int (*ndo_metadst_fill)(struct sk_buff *skb, struct metadata_dst *dst);
+ *	Used to encapsulate a metadata_dst that is associated with this
+ *	netdevice into the appropriate netlink attributes on skb.
+ *	Needs to return a lwtunnel_encap_types value if valid data was filled.
+ * int (*ndo_metadst_build)(struct net_device *dev, struct nlattr *meta,
+ *			    struct metadata_dst **dst,
+ *			    struct netlink_ext_ack *extack);
+ *	Reverse of the previous function, build a metadata_dst from netlink
+ *	attributes.  Should perform appropriate validation.
  */
 struct net_device_ops {
 	int			(*ndo_init)(struct net_device *dev);
@@ -1659,6 +1670,13 @@ struct net_device_ops {
 	 */
 	const struct net_shaper_ops *net_shaper_ops;
 #endif
+
+	int			(*ndo_metadst_fill)(struct sk_buff *skb,
+						    struct metadata_dst *dst);
+	int			(*ndo_metadst_build)(struct net_device *dev,
+						     struct nlattr *meta,
+						     struct metadata_dst **dst,
+						     struct netlink_ext_ack *extack);
 };
 
 /**

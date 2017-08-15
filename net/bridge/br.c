@@ -172,7 +172,7 @@ static int br_switchdev_event(struct notifier_block *unused,
 	switch (event) {
 	case SWITCHDEV_FDB_ADD_TO_BRIDGE:
 		fdb_info = ptr;
-		err = br_fdb_external_learn_add(br, p, fdb_info->addr,
+		err = br_fdb_external_learn_add(br, p, NULL, fdb_info->addr,
 						fdb_info->vid,
 						fdb_info->locked, false);
 		if (err) {
