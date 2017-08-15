@@ -658,6 +658,10 @@ static int ip_tun_set_opts(struct nlattr *attr, struct ip_tunnel_info *info,
 	return ip_tun_parse_opts(attr, info, extack);
 }
 
+static int ip_tun_build_common(struct ip_tunnel_info *tun_info,
+			       struct nlattr *tb[static LWTUNNEL_IP_MAX + 1],
+			       struct netlink_ext_ack *extack);
+
 static int ip_tun_build_state(struct net *net, struct nlattr *attr,
 			      unsigned int family, const void *cfg,
 			      struct lwtunnel_state **ts,
@@ -684,19 +688,32 @@ static int ip_tun_build_state(struct net *net, struct nlattr *attr,
 	new_state->type = LWTUNNEL_ENCAP_IP;
 
 	tun_info = lwt_tun_info(new_state);
-
-	err = ip_tun_set_opts(tb[LWTUNNEL_IP_OPTS], tun_info, extack);
-	if (err < 0) {
-		lwtstate_free(new_state);
-		return err;
-	}
-
-#ifdef CONFIG_DST_CACHE
-	err = dst_cache_init(&tun_info->dst_cache, GFP_KERNEL);
+	tun_info->options_len = opt_len;
+	err = ip_tun_build_common(tun_info, tb, extack);
 	if (err) {
 		lwtstate_free(new_state);
 		return err;
 	}
+
+	*ts = new_state;
+
+	return 0;
+}
+
+static int ip_tun_build_common(struct ip_tunnel_info *tun_info,
+			       struct nlattr *tb[static LWTUNNEL_IP_MAX + 1],
+			       struct netlink_ext_ack *extack)
+{
+	int err;
+
+	err = ip_tun_set_opts(tb[LWTUNNEL_IP_OPTS], tun_info, extack);
+	if (err < 0)
+		return err;
+
+#ifdef CONFIG_DST_CACHE
+	err = dst_cache_init(&tun_info->dst_cache, GFP_KERNEL);
+	if (err)
+		return err;
 #endif
 
 	if (tb[LWTUNNEL_IP_ID])
@@ -726,12 +743,40 @@ static int ip_tun_build_state(struct net *net, struct nlattr *attr,
 	}
 
 	tun_info->mode = IP_TUNNEL_INFO_TX;
-	tun_info->options_len = opt_len;
-
-	*ts = new_state;
-
 	return 0;
 }
+
+int ip_tunnel_build_metadst(struct net_device *dev, struct nlattr *meta,
+			    struct metadata_dst **dst,
+			    struct netlink_ext_ack *extack)
+{
+	struct nlattr *tb[LWTUNNEL_IP_MAX + 1];
+	struct metadata_dst *md_dst;
+	int err, opt_len;
+
+	err = nla_parse_nested_deprecated(tb, LWTUNNEL_IP_MAX, meta,
+					  ip_tun_policy, extack);
+	if (err < 0)
+		return err;
+
+	opt_len = ip_tun_get_optlen(tb[LWTUNNEL_IP_OPTS], extack);
+	if (opt_len < 0)
+		return opt_len;
+
+	md_dst = metadata_dst_alloc(opt_len, METADATA_IP_TUNNEL, GFP_ATOMIC);
+	if (!md_dst)
+		return -ENOMEM;
+
+	md_dst->u.tun_info.options_len = opt_len;
+	err = ip_tun_build_common(&md_dst->u.tun_info, tb, extack);
+	if (err) {
+		dst_release(&md_dst->dst);
+		return err;
+	}
+	*dst = md_dst;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(ip_tunnel_build_metadst);
 
 static void ip_tun_destroy_state(struct lwtunnel_state *lwtstate)
 {
@@ -850,11 +895,9 @@ static int ip_tun_fill_encap_opts(struct sk_buff *skb, int type,
 	return 0;
 }
 
-static int ip_tun_fill_encap_info(struct sk_buff *skb,
-				  struct lwtunnel_state *lwtstate)
+static int ip_tun_fill_common(struct sk_buff *skb,
+			      struct ip_tunnel_info *tun_info)
 {
-	struct ip_tunnel_info *tun_info = lwt_tun_info(lwtstate);
-
 	if (nla_put_be64(skb, LWTUNNEL_IP_ID, tun_info->key.tun_id,
 			 LWTUNNEL_IP_PAD) ||
 	    nla_put_in_addr(skb, LWTUNNEL_IP_DST, tun_info->key.u.ipv4.dst) ||
@@ -868,6 +911,26 @@ static int ip_tun_fill_encap_info(struct sk_buff *skb,
 
 	return 0;
 }
+
+static int ip_tun_fill_encap_info(struct sk_buff *skb,
+				  struct lwtunnel_state *lwtstate)
+{
+	return ip_tun_fill_common(skb, lwt_tun_info(lwtstate));
+}
+
+int ip_tunnel_fill_metadst(struct sk_buff *skb, struct metadata_dst *md_dst)
+{
+	int err;
+
+	if (md_dst->type != METADATA_IP_TUNNEL)
+		return 0;
+
+	err = ip_tun_fill_common(skb, &md_dst->u.tun_info);
+	if (err)
+		return err;
+	return LWTUNNEL_ENCAP_IP;
+}
+EXPORT_SYMBOL_GPL(ip_tunnel_fill_metadst);
 
 static int ip_tun_opts_nlsize(struct ip_tunnel_info *info)
 {
