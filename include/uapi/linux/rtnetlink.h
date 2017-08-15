@@ -400,6 +400,7 @@ enum rtattr_type_t {
 	RTA_NH_ID,
 	RTA_FLOWLABEL,
 	RTA_MPLS_FLAGS,
+	RTA_VPLS_IF,
 	__RTA_MAX
 };
 

@@ -333,6 +333,11 @@ static bool mpls_egress(struct net *net, struct mpls_route *rt,
 		success = true;
 		break;
 	}
+	case MPT_VPLS:
+		/* nothing to do here, no TTL in Ethernet
+		 * (and we shouldn't mess with the TTL in inner IP packets,
+		 * pseudowires are supposed to be transparent) */
+		break;
 	case MPT_UNSPEC:
 		/* Should have decided which protocol it is by now */
 		break;
@@ -385,6 +390,9 @@ static int mpls_forward(struct sk_buff *skb, struct net_device *dev,
 		MPLS_INC_STATS(mdev, rx_noroute);
 		goto drop;
 	}
+
+	if (rt->rt_payload_type == MPT_VPLS)
+		return vpls_rcv(skb, dev, pt, rt, hdr, orig_dev);
 
 	/* Pop the label */
 	skb_pull(skb, sizeof(*hdr));
@@ -507,6 +515,7 @@ static const struct nla_policy rtm_mpls_policy[RTA_MAX+1] = {
 struct mpls_route_config {
 	u32			rc_protocol;
 	u32			rc_ifindex;
+	u32			rc_vpls_ifindex;
 	u8			rc_mpls_flags;
 	u8			rc_via_table;
 	u8			rc_via_alen;
@@ -579,6 +588,8 @@ static void mpls_route_update(struct net *net, unsigned index,
 	platform_label = rtnl_dereference(net->mpls.platform_label);
 	rt = rtnl_dereference(platform_label[index]);
 	rcu_assign_pointer(platform_label[index], new);
+
+	vpls_label_update(index, rt, new);
 
 	mpls_notify_route(net, index, rt, new, info);
 
@@ -983,6 +994,7 @@ static int mpls_route_add(struct mpls_route_config *cfg,
 	struct mpls_route __rcu **platform_label;
 	struct net *net = cfg->rc_nlinfo.nl_net;
 	struct mpls_route *rt, *old;
+	struct net_device *vpls_dev = NULL;
 	int err = -EINVAL;
 	u8 max_via_alen;
 	unsigned index;
@@ -1037,6 +1049,24 @@ static int mpls_route_add(struct mpls_route_config *cfg,
 		goto errout;
 	}
 
+	if (cfg->rc_vpls_ifindex) {
+		err = -ENODEV;
+
+		vpls_dev = dev_get_by_index(net, cfg->rc_vpls_ifindex);
+		if (!vpls_dev) {
+			NL_SET_ERR_MSG(extack, "Invalid VPLS ifindex");
+			goto errout;
+		}
+		/* we're under RTNL; and we'll drop routes when we're
+		 * notified the device is going away. */
+		dev_put(vpls_dev);
+
+		if (!is_vpls_dev(vpls_dev)) {
+			NL_SET_ERR_MSG(extack, "Not a VPLS device");
+			goto errout;
+		}
+	}
+
 	rt = mpls_rt_alloc(nhs, max_via_alen, max_labels);
 	if (IS_ERR(rt)) {
 		err = PTR_ERR(rt);
@@ -1047,6 +1077,7 @@ static int mpls_route_add(struct mpls_route_config *cfg,
 	rt->rt_payload_type = cfg->rc_payload_type;
 	rt->rt_ttl_propagate = cfg->rc_ttl_propagate;
 	rt->rt_mpls_flags = cfg->rc_mpls_flags;
+	rt->rt_vpls_dev = vpls_dev;
 
 	if (cfg->rc_mp)
 		err = mpls_nh_build_multi(cfg, rt, max_labels, extack);
@@ -1512,6 +1543,14 @@ static int mpls_ifdown(struct net_device *dev, int event)
 		if (!rt)
 			continue;
 
+		if (rt->rt_vpls_dev == dev) {
+			switch (event) {
+			case NETDEV_UNREGISTER:
+				mpls_route_update(net, index, NULL, NULL);
+				continue;
+			}
+		}
+
 		if (event == NETDEV_UNREGISTER) {
 			u8 deleted = 0;
 
@@ -1889,6 +1928,10 @@ static int rtm_to_route_config(struct sk_buff *skb,
 				goto errout;
 			}
 			break;
+		case RTA_VPLS_IF:
+			cfg->rc_vpls_ifindex = nla_get_u32(nla);
+			cfg->rc_payload_type = MPT_VPLS;
+			break;
 		case RTA_NEWDST:
 			if (nla_get_labels(nla, MAX_NEW_LABELS,
 					   &cfg->rc_output_labels,
@@ -2029,6 +2072,10 @@ static int mpls_dump_route(struct sk_buff *skb, u32 portid, u32 seq, int event,
 
 	if (rt->rt_mpls_flags)
 		if (nla_put_u8(skb, RTA_MPLS_FLAGS, rt->rt_mpls_flags))
+			goto nla_put_failure;
+
+	if (rt->rt_vpls_dev)
+		if (nla_put_u32(skb, RTA_VPLS_IF, rt->rt_vpls_dev->ifindex))
 			goto nla_put_failure;
 
 	if (rt->rt_nhn == 1) {
@@ -2510,6 +2557,10 @@ static int mpls_getroute(struct sk_buff *in_skb, struct nlmsghdr *in_nlh,
 		if (nla_put_u8(skb, RTA_MPLS_FLAGS, rt->rt_mpls_flags))
 			goto nla_put_failure;
 
+	if (rt->rt_vpls_dev)
+		if (nla_put_u32(skb, RTA_VPLS_IF, rt->rt_vpls_dev->ifindex))
+			goto nla_put_failure;
+
 	if (nh->nh_labels &&
 	    nla_put_labels(skb, RTA_NEWDST, nh->nh_labels,
 			   nh->nh_label))
@@ -2793,6 +2844,8 @@ static int __init mpls_init(void)
 	if (err)
 		goto out_unregister_dev_type;
 
+	vpls_init();
+
 	err = rtnl_register_many(mpls_rtnl_msg_handlers);
 	if (err)
 		goto out_unregister_rtnl_af;
@@ -2822,6 +2875,7 @@ module_init(mpls_init);
 static void __exit mpls_exit(void)
 {
 	rtnl_unregister_all(PF_MPLS);
+	vpls_exit();
 	rtnl_af_unregister(&mpls_af_ops);
 	dev_remove_pack(&mpls_packet_type);
 	unregister_netdevice_notifier(&mpls_dev_notifier);
