@@ -22,6 +22,7 @@
 #include <linux/if_vlan.h>
 #include <net/switchdev.h>
 #include <trace/events/bridge.h>
+#include <net/dst_metadata.h>
 #include "br_private.h"
 
 static const struct rhashtable_params br_fdb_rht_params = {
@@ -322,6 +323,7 @@ static void fdb_delete(struct net_bridge *br, struct net_bridge_fdb_entry *f,
 	if (test_and_clear_bit(BR_FDB_DYNAMIC_LEARNED, &f->flags))
 		atomic_dec(&br->fdb_n_learned);
 	fdb_notify(br, f, RTM_DELNEIGH, swdev_notify);
+	dst_release(&(rcu_access_pointer(f->md_dst)->dst));
 	kfree_rcu(f, rcu);
 }
 
@@ -381,6 +383,7 @@ void br_fdb_find_delete_local(struct net_bridge *br,
 
 static struct net_bridge_fdb_entry *fdb_create(struct net_bridge *br,
 					       struct net_bridge_port *source,
+					       struct metadata_dst *md_dst,
 					       const unsigned char *addr,
 					       __u16 vid,
 					       unsigned long flags)
@@ -405,6 +408,7 @@ static struct net_bridge_fdb_entry *fdb_create(struct net_bridge *br,
 
 	memcpy(fdb->key.addr.addr, addr, ETH_ALEN);
 	WRITE_ONCE(fdb->dst, source);
+	WRITE_ONCE(fdb->md_dst, metadata_dst_clone(md_dst));
 	fdb->key.vlan_id = vid;
 	fdb->flags = flags;
 	fdb->updated = fdb->used = jiffies;
@@ -443,7 +447,7 @@ static int fdb_add_local(struct net_bridge *br, struct net_bridge_port *source,
 		fdb_delete(br, fdb, true);
 	}
 
-	fdb = fdb_create(br, source, addr, vid,
+	fdb = fdb_create(br, source, NULL, addr, vid,
 			 BIT(BR_FDB_LOCAL) | BIT(BR_FDB_STATIC));
 	if (!fdb)
 		return -ENOMEM;
@@ -881,7 +885,8 @@ static bool __fdb_mark_active(struct net_bridge_fdb_entry *fdb)
 }
 
 void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
-		   const unsigned char *addr, u16 vid, unsigned long flags)
+		   struct metadata_dst *md_dst, const unsigned char *addr,
+		   u16 vid, unsigned long flags)
 {
 	struct net_bridge_fdb_entry *fdb;
 
@@ -899,17 +904,27 @@ void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
 		} else {
 			unsigned long now = jiffies;
 			bool fdb_modified = false;
+			struct metadata_dst *md_ref;
 
 			if (now != fdb->updated) {
 				fdb->updated = now;
 				fdb_modified = __fdb_mark_active(fdb);
 			}
 
+			md_ref = rcu_access_pointer(fdb->md_dst);
+
 			/* fastpath: update of existing entry */
-			if (unlikely(source != READ_ONCE(fdb->dst) &&
+			if (unlikely((source != READ_ONCE(fdb->dst) ||
+				      metadata_dst_cmp(md_dst, md_ref)) &&
 				     !test_bit(BR_FDB_STICKY, &fdb->flags))) {
 				br_switchdev_fdb_notify(br, fdb, RTM_DELNEIGH);
 				WRITE_ONCE(fdb->dst, source);
+
+				/* FIXME - race condition */
+				md_ref = xchg(&fdb->md_dst,
+					      metadata_dst_clone(md_dst));
+				dst_release(&md_ref->dst);
+
 				fdb_modified = true;
 				/* Take over HW learned entry */
 				if (unlikely(test_bit(BR_FDB_ADDED_BY_EXT_LEARN,
@@ -936,7 +951,7 @@ void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
 		}
 	} else {
 		spin_lock(&br->hash_lock);
-		fdb = fdb_create(br, source, addr, vid, flags);
+		fdb = fdb_create(br, source, md_dst, addr, vid, flags);
 		if (fdb) {
 			trace_br_fdb_update(br, source, addr, vid, flags);
 			fdb_notify(br, fdb, RTM_NEWNEIGH, true);
@@ -1091,7 +1106,7 @@ static int fdb_add_entry(struct net_bridge *br, struct net_bridge_port *source,
 		if (!(flags & NLM_F_CREATE))
 			return -ENOENT;
 
-		fdb = fdb_create(br, source, addr, vid,
+		fdb = fdb_create(br, source, NULL, addr, vid,
 				 BIT(BR_FDB_ADDED_BY_USER));
 		if (!fdb)
 			return -ENOMEM;
@@ -1168,7 +1183,7 @@ static int __br_fdb_add(struct ndmsg *ndm, struct net_bridge *br,
 
 		local_bh_disable();
 		rcu_read_lock();
-		br_fdb_update(br, p, addr, vid, BIT(BR_FDB_ADDED_BY_USER));
+		br_fdb_update(br, p, NULL, addr, vid, BIT(BR_FDB_ADDED_BY_USER));
 		rcu_read_unlock();
 		local_bh_enable();
 	} else if (ndm->ndm_flags & NTF_EXT_LEARNED) {
@@ -1440,7 +1455,7 @@ int br_fdb_external_learn_add(struct net_bridge *br, struct net_bridge_port *p,
 		if (locked)
 			flags |= BIT(BR_FDB_LOCKED);
 
-		fdb = fdb_create(br, p, addr, vid, flags);
+		fdb = fdb_create(br, p, NULL, addr, vid, flags);
 		if (!fdb) {
 			err = -ENOMEM;
 			goto err_unlock;

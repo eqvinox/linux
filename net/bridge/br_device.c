@@ -59,6 +59,7 @@ netdev_tx_t br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 	dev_sw_netstats_tx_add(dev, 1, skb->len);
 
 	br_switchdev_frame_unmark(skb);
+	skb_dst_drop(skb);
 	BR_INPUT_SKB_CB(skb)->brdev = dev;
 	BR_INPUT_SKB_CB(skb)->frag_max_size = 0;
 
@@ -107,6 +108,9 @@ netdev_tx_t br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 		else
 			br_flood(br, skb, BR_PKT_MULTICAST, false, true, vid);
 	} else if ((dst = br_fdb_find_rcu(br, dest, vid)) != NULL) {
+		struct metadata_dst *md_dst = rcu_dereference(dst->md_dst);
+		if (md_dst)
+			skb_dst_set_noref(skb, &md_dst->dst);
 		br_forward(dst->dst, skb, false, true);
 	} else {
 		br_flood(br, skb, BR_PKT_UNICAST, false, true, vid);
