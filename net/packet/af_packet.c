@@ -3051,6 +3051,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	int offset = 0;
 	struct packet_sock *po = pkt_sk(sk);
 	int vnet_hdr_sz = READ_ONCE(po->vnet_hdr_sz);
+	bool inject = false;
 	int hlen, tlen, linear;
 	int extra_len = 0;
 
@@ -3075,6 +3076,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 				goto out_unlock;
 			addr = saddr->sll_addr;
 		}
+		inject  = !!(saddr->sll_pkttype & PACKET_RXINJECT);
 	}
 
 	err = -ENXIO;
@@ -3164,7 +3166,8 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	if (unlikely(extra_len == 4))
 		skb->no_fcs = 1;
 
-	packet_parse_headers(skb, sock);
+	if (!inject)
+		packet_parse_headers(skb, sock);
 
 	if (vnet_hdr_sz) {
 		err = virtio_net_hdr_to_skb(skb, &vnet_hdr, vio_le());
@@ -3174,7 +3177,18 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 		virtio_net_hdr_set_proto(skb, &vnet_hdr);
 	}
 
-	err = packet_xmit(po, skb);
+	if (unlikely(inject)) {
+		skb_reset_mac_header(skb);
+		__skb_pull(skb, skb_network_offset(skb));
+
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		skb->pkt_type = PACKET_HOST;
+		skb->tc_skip_classify = 1;
+		err = netif_rx_ni(skb);
+		// pr_info("packet injection to %s: %px %d\n", dev->name, skb, err);
+	} else {
+		err = packet_xmit(po, skb);
+	}
 
 	if (unlikely(err != 0)) {
 		if (err > 0)

@@ -45,6 +45,8 @@ struct sockaddr_punt {
 /* Unused, PACKET_FASTROUTE and PACKET_LOOPBACK are invisible to user space */
 #define PACKET_FASTROUTE	6		/* Fastrouted frame	*/
 
+#define PACKET_RXINJECT		0x80		/* pretend RX */
+
 /* Packet socket options */
 
 #define PACKET_ADD_MEMBERSHIP		1
