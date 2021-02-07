@@ -3,6 +3,7 @@
 #define __PACKET_INTERNAL_H__
 
 #include <linux/refcount.h>
+#include <linux/skbpunt.h>
 
 struct packet_mclist {
 	struct packet_mclist	*next;
@@ -132,6 +133,7 @@ struct packet_sock {
 	struct net_device __rcu	*cached_dev;
 	struct packet_type	prot_hook ____cacheline_aligned_in_smp;
 	atomic_t		tp_drops ____cacheline_aligned_in_smp;
+	struct skbpunt_listener	punt_hook ____cacheline_aligned_in_smp;
 };
 
 #define pkt_sk(ptr) container_of_const(ptr, struct packet_sock, sk)
@@ -144,6 +146,7 @@ enum packet_sock_flags {
 	PACKET_SOCK_RUNNING,
 	PACKET_SOCK_PRESSURE,
 	PACKET_SOCK_QDISC_BYPASS,
+	PACKET_SOCK_PUNT_CONSUME,
 };
 
 static inline void packet_sock_flag_set(struct packet_sock *po,
