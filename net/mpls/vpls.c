@@ -71,7 +71,7 @@ static int vpls_xmit_wire(struct sk_buff *skb, struct net_device *dev,
 	if (rt->rt_vpls_dev != dev)
 		return -EINVAL;
 
-	if (rt->rt_vpls_flags & RTA_VPLS_F_CW_TX) {
+	if (rt->rt_mpls_flags & RTA_VPLS_F_CW_TX) {
 		struct vpls_cw *cw;
 		if (skb_cow(skb, sizeof(*cw)))
 			return -ENOMEM;
@@ -164,7 +164,7 @@ int vpls_rcv(struct sk_buff *skb, struct net_device *in_dev,
 	/* bottom label is still in the skb */
 	next = skb_pull(skb, sizeof(*hdr));
 
-	if (rt->rt_vpls_flags & RTA_VPLS_F_CW_RX) {
+	if (rt->rt_mpls_flags & RTA_VPLS_F_CW_RX) {
 		struct vpls_cw *cw = next;
 		if (unlikely(!pskb_may_pull(skb, sizeof(*cw)))) {
 			dev->stats.rx_length_errors++;
