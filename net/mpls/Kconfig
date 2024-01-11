@@ -34,7 +34,7 @@ config MPLS_VPLS
 	bool "VPLS support"
 	default y
 	depends on MPLS_ROUTING && BRIDGE_NETFILTER=n
-	---help---
+	help
 	 Add support for de-&encapsulating VPLS.  Not compatible with
 	 bridge netfilter due to the latter stomping over VPLS' dst metadata.
 
