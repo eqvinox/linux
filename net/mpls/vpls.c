@@ -71,7 +71,7 @@ static int vpls_xmit_wire(struct sk_buff *skb, struct net_device *dev,
 	if (rt->rt_vpls_dev != dev)
 		return -EINVAL;
 
-	if (rt->rt_mpls_flags & RTA_VPLS_F_CW_TX) {
+	if (rt->rt_mpls_flags & RTA_MPLS_F_CW_TX) {
 		struct vpls_cw *cw;
 		if (skb_cow(skb, sizeof(*cw)))
 			return -ENOMEM;
@@ -87,8 +87,6 @@ static netdev_tx_t vpls_xmit(struct sk_buff *skb, struct net_device *dev)
 	int err = -EINVAL, ok_count = 0;
 	struct vpls_priv *priv = netdev_priv(dev);
 	struct vpls_info *vi;
-	struct pcpu_sw_netstats *stats;
-	size_t len = skb->len;
 
 	vi = skb_vpls_info(skb);
 
@@ -125,12 +123,6 @@ static netdev_tx_t vpls_xmit(struct sk_buff *skb, struct net_device *dev)
 		consume_skb(skb);
 	}
 
-	stats = this_cpu_ptr(dev->tstats);
-	u64_stats_update_begin(&stats->syncp);
-	stats->tx_packets++;
-	stats->tx_bytes += len;
-	u64_stats_update_end(&stats->syncp);
-
 	return 0;
 
 out_err_rcu:
@@ -149,7 +141,6 @@ int vpls_rcv(struct sk_buff *skb, struct net_device *in_dev,
 	struct net_device *dev = rt->rt_vpls_dev;
 	struct mpls_entry_decoded dec;
 	struct metadata_dst *md_dst;
-	struct pcpu_sw_netstats *stats;
 	void *next;
 
 	if (!dev)
@@ -164,7 +155,7 @@ int vpls_rcv(struct sk_buff *skb, struct net_device *in_dev,
 	/* bottom label is still in the skb */
 	next = skb_pull(skb, sizeof(*hdr));
 
-	if (rt->rt_mpls_flags & RTA_VPLS_F_CW_RX) {
+	if (rt->rt_mpls_flags & RTA_MPLS_F_CW_RX) {
 		struct vpls_cw *cw = next;
 		if (unlikely(!pskb_may_pull(skb, sizeof(*cw)))) {
 			dev->stats.rx_length_errors++;
@@ -207,12 +198,6 @@ int vpls_rcv(struct sk_buff *skb, struct net_device *in_dev,
 
 	skb_dst_drop(skb);
 	skb_dst_set(skb, &md_dst->dst);
-
-	stats = this_cpu_ptr(dev->tstats);
-	u64_stats_update_begin(&stats->syncp);
-	stats->rx_packets++;
-	stats->rx_bytes += skb->len;
-	u64_stats_update_end(&stats->syncp);
 
 	netif_rx(skb);
 	return 0;
@@ -366,63 +351,16 @@ static void vpls_dev_free(struct net_device *dev)
 	free_netdev(dev);
 }
 
-static const struct nla_policy vpls_meta_policy[LWT_PSEUDOWIRE_MAX + 1] = {
-	[LWT_PSEUDOWIRE_LOCAL_LABEL]	= { .type = NLA_U32 },
-};
-
-static int vpls_fill_metadst(struct sk_buff *skb, struct metadata_dst *md_dst)
-{
-	struct vpls_info *vi;
-	if (md_dst->type != METADATA_VPLS)
-		return 0;
-
-	vi = &md_dst->u.vpls_info;
-	if (nla_put_u32(skb, LWT_PSEUDOWIRE_LOCAL_LABEL, vi->pw_label))
-		return -ENOMEM;
-	return LWTUNNEL_ENCAP_PSEUDOWIRE;
-}
-
-static int vpls_build_metadst(struct net_device *dev, struct nlattr *meta,
-			      struct metadata_dst **dst,
-			      struct netlink_ext_ack *extack)
-{
-	struct nlattr *tb[LWT_PSEUDOWIRE_MAX + 1];
-	struct metadata_dst *rv;
-	int err;
-	unsigned wire;
-
-	err = nla_parse_nested(tb, LWT_PSEUDOWIRE_MAX, meta,
-			       vpls_meta_policy, extack);
-	if (err < 0)
-		return err;
-
-	if (!tb[LWT_PSEUDOWIRE_LOCAL_LABEL])
-		return -EINVAL;
-	wire = nla_get_u32(tb[LWT_PSEUDOWIRE_LOCAL_LABEL]);
-	if (wire < MPLS_LABEL_FIRST_UNRESERVED)
-		return -EINVAL;
-
-	rv = vpls_rx_dst();
-	if (!rv)
-		return -ENOMEM;
-	rv->u.vpls_info.pw_label = wire;
-
-	*dst = rv;
-	return 0;
-}
-
 static const struct net_device_ops vpls_netdev_ops = {
 	.ndo_init		= vpls_dev_init,
 	.ndo_open		= vpls_open,
 	.ndo_stop		= vpls_close,
 	.ndo_start_xmit		= vpls_xmit,
 	.ndo_change_mtu		= vpls_change_mtu,
-	.ndo_get_stats64	= ip_tunnel_get_stats64,
+	.ndo_get_stats64	= dev_get_tstats64,
 	.ndo_set_rx_mode	= vpls_set_multicast_list,
 	.ndo_set_mac_address	= eth_mac_addr,
 	.ndo_features_check	= passthru_features_check,
-	.ndo_metadst_fill	= vpls_fill_metadst,
-	.ndo_metadst_build	= vpls_build_metadst,
 };
 
 int is_vpls_dev(struct net_device *dev)
@@ -495,7 +433,7 @@ static int vpls_newlink(struct net *src_net, struct net_device *dev,
 		eth_hw_addr_random(dev);
 
 	if (tb[IFLA_IFNAME])
-		nla_strlcpy(dev->name, tb[IFLA_IFNAME], IFNAMSIZ);
+		nla_strscpy(dev->name, tb[IFLA_IFNAME], IFNAMSIZ);
 	else
 		snprintf(dev->name, IFNAMSIZ, DRV_NAME "%%d");
 
