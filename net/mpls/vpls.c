@@ -29,6 +29,13 @@
 #define MAX_MTU 65535		/* Max L3 MTU (arbitrary) */
 
 struct vpls_cw {
+	/* lower nibble indicates packet type, 0000 for normal packets.
+	 * (also used to distinguish from no-CW IPv4/IPv6 MPLS encapsulation,
+	 * otherwise strange things happen for ?4:... and ?6:... MAC addr)
+	 *
+	 * everything else is OAM of some type and shouldn't be naively
+	 * decapsulated as ethernet
+	 */
 	u8 type_flags;
 #define VPLS_CWTYPE(cw) ((cw)->type_flags & 0x0f)
 
@@ -45,6 +52,8 @@ struct vpls_wirelist {
 struct vpls_priv {
 	struct net *encap_net;
 	struct vpls_wirelist __rcu *wires;
+
+	u8 ttl;
 };
 
 static int vpls_xmit_wire(struct sk_buff *skb, struct net_device *dev,
@@ -54,7 +63,7 @@ static int vpls_xmit_wire(struct sk_buff *skb, struct net_device *dev,
 	struct mpls_entry_decoded dec;
 
 	dec.bos = 1;
-	dec.ttl = 255;
+	dec.ttl = vpls->ttl;
 
 	rt = mpls_route_input_rcu(vpls->encap_net, wire);
 	if (!rt)
@@ -194,7 +203,7 @@ int vpls_rcv(struct sk_buff *skb, struct net_device *in_dev,
 	skb_scrub_packet(skb, !net_eq(dev_net(in_dev), dev_net(dev)));
 
 	skb_reset_network_header(skb);
-	skb_probe_transport_header(skb, 0);
+	skb_probe_transport_header(skb);
 
 	skb_dst_drop(skb);
 	skb_dst_set(skb, &md_dst->dst);
@@ -330,6 +339,8 @@ static int vpls_dev_init(struct net_device *dev)
 	priv->wires = kzalloc(sizeof(struct vpls_wirelist), GFP_KERNEL);
 	if (!priv->wires)
 		return -ENOMEM;
+
+	priv->ttl = 255;
 
 	dev->tstats = netdev_alloc_pcpu_stats(struct pcpu_sw_netstats);
 	if (!dev->tstats) {

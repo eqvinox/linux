@@ -2330,6 +2330,10 @@ static inline size_t lfib_nlmsg_size(struct mpls_route *rt)
 
 	if (rt->rt_mpls_flags)
 		payload += nla_total_size(1);	/* RTA_MPLS_FLAGS */
+	if (rt->rt_vpls_dev) {
+		payload += nla_total_size(4);	/* RTA_VPLS_IF */
+		payload += nla_total_size(4);	/* RTA_VPLS_NETNS_ID */
+	}
 	return payload;
 }
 
