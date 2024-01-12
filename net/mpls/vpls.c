@@ -110,7 +110,7 @@ static netdev_tx_t vpls_xmit(struct sk_buff *skb, struct net_device *dev)
 		}
 
 		for (i = 0; i < wl->count; i++) {
-			cloned = skb_clone(skb, GFP_KERNEL);
+			cloned = skb_clone(skb, GFP_ATOMIC);
 			if (vpls_xmit_wire(cloned, dev, priv, wl->wires[i]))
 				consume_skb(cloned);
 			else
@@ -223,7 +223,7 @@ void vpls_label_update(unsigned label, struct mpls_route *rt_old,
 
 	if (rt_old && rt_old->rt_vpls_dev) {
 		priv = netdev_priv(rt_old->rt_vpls_dev);
-		wl = rcu_dereference(priv->wires);
+		wl = rtnl_dereference(priv->wires);
 
 		for (i = 0; i < wl->count; i++)
 			if (wl->wires[i] == label)
@@ -259,7 +259,7 @@ void vpls_label_update(unsigned label, struct mpls_route *rt_old,
 update_new:
 	if (rt_new && rt_new->rt_vpls_dev) {
 		priv = netdev_priv(rt_new->rt_vpls_dev);
-		wl = rcu_dereference(priv->wires);
+		wl = rtnl_dereference(priv->wires);
 
 		wl_new = kmalloc(sizeof(*wl) +
 				 (wl->count + 1) * sizeof(wl->wires[0]),
@@ -292,7 +292,7 @@ static int vpls_open(struct net_device *dev)
 	struct vpls_priv *priv = netdev_priv(dev);
 	struct vpls_wirelist *wl;
 
-	wl = rcu_dereference(priv->wires);
+	wl = rtnl_dereference(priv->wires);
 	if (wl->count > 0)
 		netif_carrier_on(dev);
 
