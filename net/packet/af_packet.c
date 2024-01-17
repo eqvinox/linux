@@ -3586,6 +3586,7 @@ static int packet_create(struct net *net, struct socket *sock, int protocol,
 
 	po->prot_hook.af_packet_priv = sk;
 	po->prot_hook.af_packet_net = sock_net(sk);
+	po->punt_hook.af_packet_priv = po;
 	po->punt_hook.net = net;
 
 	if (proto && sock->type != SOCK_PUNT) {
