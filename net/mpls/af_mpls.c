@@ -392,7 +392,6 @@ static int mpls_forward(struct sk_buff *skb, struct net_device *dev,
 {
 	struct net *net = dev_net(dev);
 	struct mpls_shim_hdr *hdr;
-	const struct mpls_nh *nh;
 	struct mpls_route *rt;
 	struct mpls_entry_decoded dec;
 	struct mpls_dev *mdev;
@@ -468,7 +467,7 @@ drop:
 int mpls_rt_xmit(struct sk_buff *skb, struct mpls_route *rt,
 		 struct mpls_entry_decoded dec)
 {
-	struct mpls_nh *nh;
+	const struct mpls_nh *nh;
 	struct net_device *out_dev = NULL;
 	struct mpls_dev *out_mdev;
 	unsigned int hh_len;
