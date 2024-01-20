@@ -20,6 +20,7 @@
 #include <net/dst_metadata.h>
 #include <net/ip_tunnels.h>
 #include <linux/lwtunnel.h>
+#include <linux/skbpunt.h>
 
 #include "internal.h"
 
@@ -54,6 +55,19 @@ struct vpls_priv {
 	struct vpls_wirelist __rcu *wires;
 
 	u8 ttl;
+};
+
+/* vpls ifindex passed as u32; skb interface is MPLS ingress iface */
+static struct skbpunt_location vpls_oam_punt __read_mostly = {
+	.owner = THIS_MODULE,
+	.name = "vplsoam\0",
+	.infocuts = { 4, 0 },
+};
+
+static struct skbpunt_location vpls_cw_punt __read_mostly = {
+	.owner = THIS_MODULE,
+	.name = "vplscwnz",
+	.infocuts = { 4, 0 },
 };
 
 static int vpls_xmit_wire(struct sk_buff *skb, struct net_device *dev,
@@ -146,14 +160,32 @@ int vpls_rcv(struct sk_buff *skb, struct net_device *in_dev,
 	if (!dev)
 		goto drop_nodev;
 
+	/* bottom label is still in the skb */
 	dec = mpls_entry_decode(hdr);
+	next = skb_pull(skb, sizeof(*hdr));
+
 	if (!dec.bos) {
+		if (unlikely(!pskb_may_pull(skb, sizeof(*hdr)))) {
+			dev->stats.rx_frame_errors++;
+			goto drop;
+		}
+		hdr = next;
+
+		dec = mpls_entry_decode(hdr);
+
+		if ((dec.label == MPLS_LABEL_RTALERT ||
+		     dec.label == MPLS_LABEL_GAL ||
+		     dec.label == MPLS_LABEL_OAMALERT)) {
+			u32 ifindex = dev->ifindex;
+
+			if (skb_punt(&vpls_oam_punt, skb, (u8 *)&ifindex,
+				     sizeof(ifindex)))
+				goto drop_nodev;
+		}
+
 		dev->stats.rx_frame_errors++;
 		goto drop;
 	}
-
-	/* bottom label is still in the skb */
-	next = skb_pull(skb, sizeof(*hdr));
 
 	if (rt->rt_mpls_flags & RTA_MPLS_F_CW_RX) {
 		struct vpls_cw *cw = next;
@@ -164,8 +196,14 @@ int vpls_rcv(struct sk_buff *skb, struct net_device *in_dev,
 		next = skb_pull(skb, sizeof(*cw));
 
 		if (VPLS_CWTYPE(cw) != 0) {
-			/* insert MPLS OAM implementation here */
-			goto drop_nodev;
+			u32 ifindex = dev->ifindex;
+
+			if (skb_punt(&vpls_cw_punt, skb, (u8 *)&ifindex,
+				     sizeof(ifindex)))
+				goto drop_nodev;
+
+			dev->stats.rx_frame_errors++;
+			goto drop;
 		}
 	}
 
@@ -522,15 +560,27 @@ __init int vpls_init(void)
 	ret = rtnl_link_register(&vpls_link_ops);
 	if (ret)
 		goto out;
+	ret = skbpunt_register(&vpls_oam_punt);
+	if (ret)
+		goto out_remove_link_ops;
+	ret = skbpunt_register(&vpls_cw_punt);
+	if (ret)
+		goto out_remove_vpls_oam;
 
 	return 0;
 
+out_remove_vpls_oam:
+	skbpunt_unregister(&vpls_oam_punt);
+out_remove_link_ops:
+	rtnl_link_unregister(&vpls_link_ops);
 out:
 	return ret;
 }
 
 __exit void vpls_exit(void)
 {
+	skbpunt_unregister(&vpls_cw_punt);
+	skbpunt_unregister(&vpls_oam_punt);
 	rtnl_link_unregister(&vpls_link_ops);
 }
 
