@@ -56,6 +56,7 @@
 #include <net/l3mdev.h>
 #include <net/lwtunnel.h>
 #include <net/ip_tunnels.h>
+#include <linux/skbpunt.h>
 
 static int ip6_finish_output2(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -499,6 +500,8 @@ static bool ip6_pkt_too_big(const struct sk_buff *skb, unsigned int mtu)
 	return true;
 }
 
+extern struct skbpunt_location ip6_hlim0_punt;
+
 int ip6_forward(struct sk_buff *skb)
 {
 	struct dst_entry *dst = skb_dst(skb);
@@ -555,7 +558,9 @@ int ip6_forward(struct sk_buff *skb)
 	 *	check and decrement ttl
 	 */
 	if (hdr->hop_limit <= 1) {
-		icmpv6_send(skb, ICMPV6_TIME_EXCEED, ICMPV6_EXC_HOPLIMIT, 0);
+		if (!skb_punt(&ip6_hlim0_punt, skb, NULL, 0))
+			icmpv6_send(skb, ICMPV6_TIME_EXCEED, ICMPV6_EXC_HOPLIMIT,
+				    0);
 		__IP6_INC_STATS(net, idev, IPSTATS_MIB_INHDRERRORS);
 
 		kfree_skb_reason(skb, SKB_DROP_REASON_IP_INHDR);

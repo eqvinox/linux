@@ -39,6 +39,7 @@
 #include <linux/netdevice.h>
 #include <linux/icmpv6.h>
 #include <linux/netfilter_ipv6.h>
+#include <linux/skbpunt.h>
 
 #include <net/ip.h>
 #include <net/ipv6.h>
@@ -1070,6 +1071,12 @@ static const struct ipv6_bpf_stub ipv6_bpf_stub_impl = {
 	.ipv6_dev_get_saddr = ipv6_dev_get_saddr,
 };
 
+struct skbpunt_location ip6_hlim0_punt __read_mostly = {
+	.owner = THIS_MODULE,
+	.name = "ipv6hlim",
+	.infocuts = { 0, }
+};
+
 static int __init inet6_init(void)
 {
 	struct list_head *r;
@@ -1235,6 +1242,9 @@ static int __init inet6_init(void)
 	if (err)
 		goto sysctl_fail;
 #endif
+
+	if (skbpunt_register(&ip6_hlim0_punt))
+		pr_crit("%s: Cannot add hoplimit-0 punt point\n", __func__);
 
 	/* ensure that ipv6 stubs are visible only after ipv6 is ready */
 	wmb();
