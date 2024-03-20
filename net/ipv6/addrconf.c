@@ -1513,6 +1513,7 @@ enum {
 	IPV6_SADDR_RULE_HOA,
 #endif
 	IPV6_SADDR_RULE_OIF,
+	IPV6_SADDR_RULE_PIO_BY_NEXTHOP,
 	IPV6_SADDR_RULE_LABEL,
 	IPV6_SADDR_RULE_PRIVACY,
 	IPV6_SADDR_RULE_ORCHID,
@@ -1533,13 +1534,14 @@ struct ipv6_saddr_score {
 };
 
 struct ipv6_saddr_dst {
-	const struct flowi6 *fl6;
+	struct flowi6 *fl6;
 	const struct dst_entry *dst;
 	const struct sock *sk;
 	int ifindex;
 	int scope;
 	int label;
 	unsigned int prefs;
+	struct net *net;
 };
 
 static inline int ipv6_saddr_preferred(int type)
@@ -1582,6 +1584,80 @@ static bool ipv6_allow_optimistic_dad(const struct net *net,
 #else
 	return false;
 #endif
+}
+
+/* "source address is preferable if the chosen nexthop advertised it as a PIO"
+ * => consider 'advertised as a PIO' to be 'the routes for the source's subtree
+ *    include one with the same nexthop'
+ *
+ * NB: there is no backtracking in the subtree here, this is intentional -
+ * each prefix seen (and accepted) in PIOs creates essentially a "zone" which
+ * is our search scope.
+ */
+static int ipv6_saddr_rule5p5(struct ipv6_saddr_score *score,
+			      struct ipv6_saddr_dst *saddr_dst)
+{
+	const struct rt6_info *rt, *cmp_rt;
+	struct dst_entry *cmp_dst;
+	struct fib6_info *f6i;
+	int ret = 0;
+
+	rt = container_of(saddr_dst->dst, struct rt6_info, dst);
+
+	/* fl6->saddr is ::, cf. check at the top of ipv6_common_get_saddr() */
+	saddr_dst->fl6->saddr = score->ifa->addr;
+	cmp_dst = ip6_route_output(saddr_dst->net, saddr_dst->sk,
+				   saddr_dst->fl6);
+	memset(&saddr_dst->fl6->saddr, 0, sizeof(saddr_dst->fl6->saddr));
+
+	if (cmp_dst->error)
+		goto out_release_dst;
+
+	cmp_rt = container_of(cmp_dst, struct rt6_info, dst);
+
+	/* this must work if _any_ nexthop matches; the non-subtree best may
+	 * not be in same order as subtree best
+	 */
+	for (f6i = rcu_dereference(cmp_rt->from); f6i;
+	     f6i = rcu_dereference(f6i->fib6_next)) {
+		struct fib6_nh *f6n = f6i->fib6_nh;
+		struct fib6_info *sibling;
+
+		/* non-subtree route: says nothing about router advertising this source */
+		if (f6i->fib6_src.plen == 0)
+			continue;
+
+		if (f6n->nh_common.nhc_dev != saddr_dst->dst->dev ||
+		    f6n->nh_common.nhc_gw_family != AF_INET6)
+			continue;
+
+		if (ipv6_addr_equal(&f6n->nh_common.nhc_gw.ipv6,
+				    &rt->rt6i_gateway)) {
+			ret = 1;
+			goto out_release_dst;
+		}
+
+		if (!f6i->fib6_nsiblings)
+			continue;
+
+		list_for_each_entry(sibling, &f6i->fib6_siblings, fib6_siblings) {
+			f6n = sibling->fib6_nh;
+
+			if (f6n->nh_common.nhc_dev != saddr_dst->dst->dev ||
+			    f6n->nh_common.nhc_gw_family != AF_INET6)
+				continue;
+
+			if (ipv6_addr_equal(&f6n->nh_common.nhc_gw.ipv6,
+					    &rt->rt6i_gateway)) {
+				ret = 1;
+				goto out_release_dst;
+			}
+		}
+	}
+
+out_release_dst:
+	dst_release(cmp_dst);
+	return ret;
 }
 
 static int ipv6_get_saddr_eval(struct net *net,
@@ -1667,6 +1743,24 @@ static int ipv6_get_saddr_eval(struct net *net,
 		/* Rule 5: Prefer outgoing interface */
 		ret = (!dst->ifindex ||
 		       dst->ifindex == score->ifa->idev->dev->ifindex);
+		break;
+	case IPV6_SADDR_RULE_PIO_BY_NEXTHOP:
+		/* Rule 5.5: Prefer sources advertised by chosen next-hop */
+
+		/* Without subtrees, the source address will make no difference
+		 * in the ip6_route_output call in rule5p5.  Therefore the rule
+		 * 5.5 check becomes useless.  This wouldn't result in any
+		 * errors, but ip6_route_output isn't free, so if subtrees are
+		 * disabled save some cycles by skipping this entirely.
+		 *
+		 * This is done through subtrees_enabled to have the code
+		 * compiled regardless.
+		 */
+		if (fib6_routes_require_src(net) && dst->dst
+		    && !dst->dst->error)
+			ret = ipv6_saddr_rule5p5(score, dst);
+		else
+			ret = 1;
 		break;
 	case IPV6_SADDR_RULE_LABEL:
 		/* Rule 6: Prefer matching label */
@@ -1826,7 +1920,12 @@ int ipv6_fl_get_saddr(struct net *net, const struct dst_entry *dst_entry,
 	int hiscore_idx = 0;
 	int ret = 0;
 
+	/* we should never end up here with a non-empty saddr. */
+	if (WARN_ON_ONCE(!ipv6_addr_any(&fl6->saddr)))
+		return 0;
+
 	dst_type = __ipv6_addr_type(&fl6->daddr);
+	dst.net = net;
 	dst.fl6 = fl6;
 	dst.sk = sk;
 	dst.dst = dst_entry;
