@@ -82,6 +82,7 @@ static int ip_forward_finish(struct net *net, struct sock *sk, struct sk_buff *s
 }
 
 extern struct skbpunt_location ip_ttl0_punt;
+extern struct skbpunt_location ip_mtu_punt;
 
 int ip_forward(struct sk_buff *skb)
 {
@@ -136,9 +137,12 @@ int ip_forward(struct sk_buff *skb)
 	IPCB(skb)->flags |= IPSKB_FORWARDED;
 	mtu = ip_dst_mtu_maybe_forward(&rt->dst, true);
 	if (ip_exceeds_mtu(skb, mtu)) {
+		u32 ifindex = rt->dst.dev->ifindex;
+
 		IP_INC_STATS(net, IPSTATS_MIB_FRAGFAILS);
-		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED,
-			  htonl(mtu));
+		if (!skb_punt(&ip_mtu_punt, skb, (u8 *)&ifindex, sizeof(ifindex)))
+			icmp_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED,
+				  htonl(mtu));
 		SKB_DR_SET(reason, PKT_TOO_BIG);
 		goto drop;
 	}

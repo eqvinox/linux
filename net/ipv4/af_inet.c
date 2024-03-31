@@ -1891,6 +1891,12 @@ struct skbpunt_location ip_ttl0_punt __read_mostly = {
 	.infocuts = { 0, }
 };
 
+struct skbpunt_location ip_mtu_punt __read_mostly = {
+	.owner = THIS_MODULE,
+	.name = "ipv4mtu ",
+	.infocuts = { 4, 0, }
+};
+
 static int __init inet_init(void)
 {
 	struct inet_protosw *q;
@@ -1929,6 +1935,8 @@ static int __init inet_init(void)
 
 	if (skbpunt_register(&ip_ttl0_punt))
 		pr_crit("%s: Cannot add TTL-0 punt point\n", __func__);
+	if (skbpunt_register(&ip_mtu_punt))
+		pr_crit("%s: Cannot add MTU punt point\n", __func__);
 
 	/*
 	 *	Add all the base protocols.
