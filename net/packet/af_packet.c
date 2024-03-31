@@ -3184,7 +3184,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 		skb->pkt_type = PACKET_HOST;
 		skb->tc_skip_classify = 1;
-		err = netif_rx_ni(skb);
+		err = netif_rx(skb);
 		// pr_info("packet injection to %s: %px %d\n", dev->name, skb, err);
 	} else {
 		err = packet_xmit(po, skb);
