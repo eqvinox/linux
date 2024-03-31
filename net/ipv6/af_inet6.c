@@ -1077,6 +1077,12 @@ struct skbpunt_location ip6_hlim0_punt __read_mostly = {
 	.infocuts = { 0, }
 };
 
+struct skbpunt_location ip6_mtu_punt __read_mostly = {
+	.owner = THIS_MODULE,
+	.name = "ipv6mtu ",
+	.infocuts = { 4, 0, }
+};
+
 static int __init inet6_init(void)
 {
 	struct list_head *r;
@@ -1245,6 +1251,8 @@ static int __init inet6_init(void)
 
 	if (skbpunt_register(&ip6_hlim0_punt))
 		pr_crit("%s: Cannot add hoplimit-0 punt point\n", __func__);
+	if (skbpunt_register(&ip6_mtu_punt))
+		pr_crit("%s: Cannot add MTU punt point\n", __func__);
 
 	/* ensure that ipv6 stubs are visible only after ipv6 is ready */
 	wmb();

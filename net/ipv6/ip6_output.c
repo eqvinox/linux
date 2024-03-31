@@ -501,6 +501,7 @@ static bool ip6_pkt_too_big(const struct sk_buff *skb, unsigned int mtu)
 }
 
 extern struct skbpunt_location ip6_hlim0_punt;
+extern struct skbpunt_location ip6_mtu_punt;
 
 int ip6_forward(struct sk_buff *skb)
 {
@@ -651,9 +652,19 @@ int ip6_forward(struct sk_buff *skb)
 		mtu = IPV6_MIN_MTU;
 
 	if (ip6_pkt_too_big(skb, mtu)) {
-		/* Again, force OUTPUT device used as source address */
+		u32 ifindex = dev->ifindex;
+		bool stolen;
+
+		stolen = skb_punt(&ip6_mtu_punt, skb, (u8 *)&ifindex,
+				  sizeof(ifindex));
+
+		/* Again, force OUTPUT device used as source address
+		 * (but change this after the punt check above.)
+		 */
 		skb->dev = dev;
-		icmpv6_send(skb, ICMPV6_PKT_TOOBIG, 0, mtu);
+		if (!stolen)
+			icmpv6_send(skb, ICMPV6_PKT_TOOBIG, 0, mtu);
+
 		__IP6_INC_STATS(net, idev, IPSTATS_MIB_INTOOBIGERRORS);
 		__IP6_INC_STATS(net, ip6_dst_idev(dst),
 				IPSTATS_MIB_FRAGFAILS);
