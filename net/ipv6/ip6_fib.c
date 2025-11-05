@@ -1650,8 +1650,11 @@ static struct fib6_node *fib6_node_lookup_1(struct fib6_node *root,
 					struct fib6_node *sfn;
 					sfn = fib6_node_lookup_1(subtree,
 								 args + 1);
-					if (!sfn)
+					if (!sfn) {
+						if (fn->fn_flags & RTN_RTINFO)
+							return fn;
 						goto backtrack;
+					}
 					fn = sfn;
 				}
 #endif
