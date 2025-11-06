@@ -465,13 +465,14 @@ static void vpls_setup(struct net_device *dev)
 	dev->priv_flags |= IFF_NO_QUEUE;
 
 	dev->netdev_ops = &vpls_netdev_ops;
-	dev->features |= NETIF_F_LLTX;
 	dev->features |= VPLS_FEATURES;
 	dev->vlan_features = dev->features;
 	dev->priv_destructor = vpls_dev_free;
 
 	dev->hw_features = VPLS_FEATURES;
 	dev->hw_enc_features = VPLS_FEATURES;
+
+	dev->lltx = true;
 
 	netif_keep_dst(dev);
 }
@@ -507,10 +508,12 @@ static int vpls_validate(struct nlattr *tb[], struct nlattr *data[],
 
 static struct rtnl_link_ops vpls_link_ops;
 
-static int vpls_newlink(struct net *src_net, struct net_device *dev,
-			struct nlattr *tb[], struct nlattr *data[],
+static int vpls_newlink(struct net_device *dev,
+			struct rtnl_newlink_params *params,
 			struct netlink_ext_ack *extack)
 {
+	struct nlattr **data = params->data;
+	struct nlattr **tb = params->tb;
 	int err;
 	struct vpls_priv *priv = netdev_priv(dev);
 
@@ -525,7 +528,7 @@ static int vpls_newlink(struct net *src_net, struct net_device *dev,
 	err = register_netdevice(dev);
 	if (err < 0)
 		goto err;
-	priv->encap_net = get_net(src_net);
+	priv->encap_net = get_net(params->src_net);
 
 	netif_carrier_off(dev);
 	return 0;
