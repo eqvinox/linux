@@ -216,6 +216,7 @@ static u16 packet_pick_tx_queue(struct sk_buff *skb);
 struct packet_skb_cb {
 	union {
 		struct sockaddr_pkt pkt;
+		struct sockaddr_punt punt;
 		union {
 			/* Trick: alias skb original length with
 			 * ll.sll_family and ll.protocol in order
@@ -2237,7 +2238,7 @@ static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
 		skb = nskb;
 	}
 
-	sock_skb_cb_check_size(sizeof(*PACKET_SKB_CB(skb)) + MAX_ADDR_LEN - 8);
+	sock_skb_cb_check_size(offsetof(typeof(*PACKET_SKB_CB(skb)), sa.ll.sll_addr) + MAX_ADDR_LEN);
 
 	sll = &PACKET_SKB_CB(skb)->sa.ll;
 	sll->sll_hatype = dev->type;
@@ -2247,7 +2248,8 @@ static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
 	else
 		sll->sll_ifindex = dev->ifindex;
 
-	sll->sll_halen = dev_parse_header(skb, sll->sll_addr);
+	if (po->sk.sk_type != SOCK_PUNT)
+		sll->sll_halen = dev_parse_header(skb, sll->sll_addr);
 
 	/* sll->sll_family and sll->sll_protocol are set in packet_recvmsg().
 	 * Use their space for storing the original skb length.
@@ -2579,6 +2581,7 @@ static unsigned packet_rcv_punt(struct sk_buff *skb,
 				struct skbpunt_state *state)
 {
 	struct packet_sock *po = hook->af_packet_priv;
+	struct sockaddr_punt *spunt;
 	int ret;
 
 	RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
@@ -2598,6 +2601,11 @@ static unsigned packet_rcv_punt(struct sk_buff *skb,
 	}
 
 	skb = state->af_packet_skb;
+	spunt = &PACKET_SKB_CB(skb)->sa.punt;
+	memcpy(spunt->spunt_location, hook->loc->name,
+	       sizeof(spunt->spunt_location));
+	memcpy(spunt->spunt_info, state->info, state->info_len);
+	spunt->spunt_halen = 8 + state->info_len;
 
 	/* if BPF rejects the packet, we get ret = -1 here */
 	ret = po->prot_hook.func(skb_get(skb), skb->dev, &po->prot_hook, skb->dev);
