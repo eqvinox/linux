@@ -1888,7 +1888,7 @@ static struct packet_type ip_packet_type __read_mostly = {
 struct skbpunt_location ip_ttl0_punt __read_mostly = {
 	.owner = THIS_MODULE,
 	.name = "ipv4ttl0",
-	.infocuts = { 0, }
+	.infocuts = { 4, 0, }
 };
 
 struct skbpunt_location ip_mtu_punt __read_mostly = {

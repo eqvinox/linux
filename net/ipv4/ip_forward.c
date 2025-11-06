@@ -181,7 +181,10 @@ too_many_hops:
 	/* Tell the sender its packet died... */
 	__IP_INC_STATS(net, IPSTATS_MIB_INHDRERRORS);
 	{
-		if (skb_punt(&ip_ttl0_punt, skb, NULL, 0))
+		rt = skb_rtable(skb);
+		u32 ifindex = rt->dst.dev->ifindex;
+
+		if (skb_punt(&ip_ttl0_punt, skb, (u8 *)&ifindex, sizeof(ifindex)))
 			goto drop;
 	}
 	icmp_send(skb, ICMP_TIME_EXCEEDED, ICMP_EXC_TTL, 0);
